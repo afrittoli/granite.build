@@ -308,6 +308,16 @@ quick-tests:
 		PYTEST_TEST_TARGETS="$(PYTEST_TEST_TARGETS)"	\
 		.test
 
+# The step-framework tests in steps/<path>/<env>/test/, which pyproject's testpaths
+# leave out. Runs them as each step's `make test` does, without rendering the space
+# or building the image, and without the per-cluster build tests (see the script).
+# Pass STEP_TEST_DIRS to run some steps only, e.g.
+#   make step-tests STEP_TEST_DIRS=steps/merge/mergekit/skypilot/test
+.PHONY: step-tests
+step-tests:
+	source $(VENVDIR)/bin/activate && \
+		scripts/run-step-tests.sh $(STEP_TEST_DIRS)
+
 .PHONY: extended-tests-setup
 # Brings up the local infrastructure the extended tests launch into: SLURM and the
 # kind cluster for the skypilot/kubernetes tests (either one missing fails setup),
@@ -747,7 +757,7 @@ $(VENVDIR): pyproject.toml
 	$(PYTHON) -m venv $(VENVDIR)
 	echo '[global]' > $(VENVDIR)/pip.conf
 	if [ -n "$(VENV_USE_ARTIFACTORY)" ]; then \
-		echo "extra-index-url = https://$$ARTIFACTORY_USER:$$ARTIFACTORY_API_KEY@na.artifactory.swg-devops.com/artifactory/api/pypi/res-data-model-factory-team-pypi-local/simple" >> $(VENVDIR)/pip.conf; \
+		echo "extra-index-url = https://$$ARTIFACTORY_USER:$$ARTIFACTORY_API_KEY@na.artifactory.swg-devops.com/artifactory/api/pypi/res-data-model-factory-team-pypi-local/simple" >> $(VENVDIR)/pip.conf; : hashicorpignore; \
 	fi
 	source $(VENVDIR)/bin/activate &&			\
 	${PIP} install --upgrade pip &&		\

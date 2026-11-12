@@ -134,6 +134,27 @@ jobs:
       - name: Run quick tests
         run: make quick-tests
 
+  # The tests each step keeps in steps/<path>/<env>/test/. pyproject's testpaths
+  # leave them out of quick-tests, so before this job they ran only when an author
+  # ran `make test` in the step. No cluster, image or secret is needed: the
+  # per-cluster build tests are deselected by their markers (see
+  # scripts/run-step-tests.sh). Python 3.12 only, the version the step images use.
+  step-tests:
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: make venv
+
+      - name: Run step tests
+        run: make step-tests
+
   demo-cpu:
     if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest

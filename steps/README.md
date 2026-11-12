@@ -374,6 +374,14 @@ Defined once in [`common.mk`](common.mk) and shared by every step:
   make test PYTEST_ARGS='-k "not cancellation" -x'
   ```
 
+  CI runs every step's `test/` on each pull request with `make step-tests` from the repo
+  root ([`scripts/run-step-tests.sh`](../scripts/run-step-tests.sh)). It runs pytest the
+  way `make test` does, with `src/` on `PYTHONPATH`, but does not render the space or
+  build the image, and selects `not ibm and not extended`, which leaves out the
+  per-cluster build tests. A test that needs a cluster, an image or a credential must
+  therefore carry one of those markers, or skip when what it needs is missing. To run
+  one step the way CI does: `make step-tests STEP_TEST_DIRS=steps/<path>/<env>/test`.
+
   Runs pytest with `$(PYTEST_CAPTURE)`, default `-s`, matching the repo-root
   Makefile. **Do not drop `-s` for a SkyPilot build test.** Under pytest's capture the
   SkyPilot SDK's `click.secho(cluster_name)` flushes a stdout fd that has been replaced,

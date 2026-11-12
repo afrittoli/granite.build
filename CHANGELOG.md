@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dataset pins live in `steps/eval/VENDORED.md` and are fetched at run or image-build
   time (#460).
 
+- **CI runs the step-framework tests.** A new `step-tests` job runs `make step-tests`, which
+  runs each step's `steps/<path>/<env>/test/` as the step's `make test` does, without
+  rendering the space, building the image or running the per-cluster build tests
+  (`not ibm and not extended`). Before, pyproject's `testpaths` left these tests out of
+  every CI suite. The vendored granite-evals tests under `steps/eval/*/tests` are not
+  included yet: they need the granite-evals package and its extras.
+
 ### Changed
 
 - **The `misc` step category is now `aux` (#671).** The byoc step moves from
