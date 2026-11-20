@@ -10,6 +10,10 @@ nothing and exited 1 after a complete run (builds f71274d5, 1131fd71); in a shar
 tree it emitted a sibling eval's file instead. The search is also anchored at
 /<experiment>/, so one rung's name cannot match a longer one (ckpt_25, ckpt_250).
 These tests run each step's real search block in bash against such trees.
+
+On AWS, sage_eval_config.result_subdir names the eval's own results directory under
+the experiment. When it is set, the searches start there, so a sibling eval's
+result cannot be emitted in place of this eval's own.
 """
 
 import os
@@ -32,13 +36,21 @@ STEPS = {
 
 EXPERIMENT = "exp-ckpt_1000"
 SALAD = "safety-eval/salad-bench/export-1000/base_set-result.json"
+SALAD_DIR = "safety-eval/salad-bench"
+IFEVAL = "ifeval/export-1000/metrics-all.jsonl"
+AWS = "aws/steps/sage-eval"
 
 
 def _search_block(step: str) -> str:
-    """The step's run-script lines from the first results search to the emit's `fi`."""
+    """The step's run-script lines from the search root (or, without one, the first
+    results search) to the emit's `fi`."""
     run = one_script(ENVS / step / "step.yaml", "GB_ARTIFACT_ID:sage_eval_results")
     lines = run.splitlines()
-    start = next(i for i, l in enumerate(lines) if "RESULT_FILE=$(find" in l)
+    start = next(
+        i
+        for i, l in enumerate(lines)
+        if 'if [ -n "$RESULT_SUBDIR" ]' in l or "RESULT_FILE=$(find" in l
+    )
     emit = next(i for i, l in enumerate(lines) if 'if [ -n "$RESULT_FILE" ]' in l)
     indent = len(lines[emit]) - len(lines[emit].lstrip())
     end = next(
@@ -53,14 +65,21 @@ def _search_block(step: str) -> str:
 LOG_MTIME, OLD, NEW = 1000, 0, 2000
 
 
-def _emitted(step: str, root: Path, tmp_path: Path) -> str | None:
+def _emitted(
+    step: str, root: Path, tmp_path: Path, result_subdir: str = ""
+) -> str | None:
     log = tmp_path / "sage-eval.log"
     log.write_text("")
     os.utime(log, (LOG_MTIME, LOG_MTIME))
     # The fallback search compares against a file touched before the eval: the
     # eval's log on LSF, a start marker on AWS. Point either at a private copy.
     block = _search_block(step)
-    env = {**os.environ, STEPS[step]: str(root), "EXPERIMENT": EXPERIMENT}
+    env = {
+        **os.environ,
+        STEPS[step]: str(root),
+        "EXPERIMENT": EXPERIMENT,
+        "RESULT_SUBDIR": result_subdir,
+    }
     if "/tmp/sage-eval.log" in block:
         block = block.replace("/tmp/sage-eval.log", str(log))
     else:
@@ -164,3 +183,68 @@ def test_traversal_order_decides_between_salad_and_a_sibling_eval(step, tmp_path
     salad = _touch(root, SALAD)
     ifeval = _touch(root, "ifeval/export-1000/metrics-all.jsonl")
     assert _emitted(step, root, tmp_path) in {str(salad), str(ifeval)}
+
+
+def test_result_subdir_emits_this_evals_result_next_to_a_sibling(tmp_path):
+    """With result_subdir set, SALAD next to IFEval emits SALAD's own result."""
+    root = tmp_path / "out"
+    _touch(root, IFEVAL)
+    salad = _touch(root, SALAD)
+    assert _emitted(AWS, root, tmp_path, SALAD_DIR) == str(salad)
+
+
+def test_result_subdir_does_not_pass_on_a_siblings_result(tmp_path):
+    """A SALAD eval that wrote nothing fails, though IFEval's result is on disk."""
+    root = tmp_path / "out"
+    _touch(root, IFEVAL)
+    (root / EXPERIMENT / SALAD_DIR).mkdir(parents=True)
+    assert _emitted(AWS, root, tmp_path, SALAD_DIR) is None
+
+
+def test_result_subdir_limits_the_fallback_to_this_eval(tmp_path):
+    """The fallback emits a new CSV under this eval's directory, not a sibling's."""
+    root = tmp_path / "out"
+    _touch(root, "ifeval/summary.csv", mtime=NEW)
+    assert _emitted(AWS, root, tmp_path, SALAD_DIR) is None
+    own = _touch(root, f"{SALAD_DIR}/summary.csv", mtime=NEW)
+    assert _emitted(AWS, root, tmp_path, SALAD_DIR) == str(own)
+
+
+def _subdir_check() -> str:
+    """The AWS step's result_subdir check: the ``case`` block that validates it."""
+    run = one_script(ENVS / AWS / "step.yaml", "GB_ARTIFACT_ID:sage_eval_results")
+    lines = run.splitlines()
+    start = next(i for i, l in enumerate(lines) if 'case "/${RESULT_SUBDIR}/"' in l)
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "esac")
+    eval_line = next(i for i, l in enumerate(lines) if "/sage/cluster/gb/scripts/" in l)
+    assert end < eval_line, "result_subdir must be checked before the eval"
+    return "\n".join(lines[start : end + 1])
+
+
+@pytest.mark.parametrize(
+    "value, accepted",
+    [
+        ("", True),
+        (SALAD_DIR, True),
+        ("ifeval/", True),
+        ("a..b", True),
+        ("/abs/path", False),
+        ("..", False),
+        ("../other-exp", False),
+        ("a/../../other-exp", False),
+        ("a/..", False),
+    ],
+)
+def test_result_subdir_must_stay_under_the_experiment(value, accepted):
+    """An absolute path or a '..' segment would leave <output_dir>/<experiment>."""
+    env = {**os.environ, "RESULT_SUBDIR": value}
+    r = subprocess.run(
+        ["bash", "-ec", f"{_subdir_check()}\necho REACHED"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ("REACHED" in r.stdout) is accepted, r.stdout
+    if not accepted:
+        assert r.returncode == 1 and "result_subdir" in r.stdout
